@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Driver Ledger MVP</title>
+    <meta
+      name="description"
+      content="A simple local rideshare income and expense tracker for self-employed drivers."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Self-employed driver tracker</p>
+          <h1>Driver Ledger</h1>
+          <p class="subhead">Daily driving stays simple. Bigger expenses are added only when needed.</p>
+        </div>
+        <div class="topbar-actions" aria-label="App actions">
+          <button class="button secondary" id="seedDemoButton" type="button">Add sample data</button>
+          <button class="button secondary" id="exportButton" type="button">Export CSV</button>
+          <button class="button danger" id="clearButton" type="button">Clear data</button>
+        </div>
+      </header>
+
+      <section class="controls-band" aria-label="Dashboard controls">
+        <form class="auth-box" id="authForm">
+          <div>
+            <span id="authStatus">Cloud sync: signed out</span>
+            <small id="cloudStatus">Records are saved in this browser until you sign in.</small>
+          </div>
+          <input id="authEmail" type="email" placeholder="Email" autocomplete="email" />
+          <input id="authPassword" type="password" placeholder="Password" autocomplete="current-password" />
+          <button class="button secondary" id="signInButton" type="submit">Sign in</button>
+          <button class="button secondary" id="signUpButton" type="button">Create account</button>
+          <button class="button secondary hidden" id="signOutButton" type="button">Sign out</button>
+          <button class="button secondary hidden" id="syncButton" type="button">Sync now</button>
+        </form>
+        <label class="field compact">
+          <span>View</span>
+          <select id="periodSelect">
+            <option value="day">Day</option>
+            <option value="week" selected>Week</option>
+            <option value="month">Month</option>
+            <option value="year">Year</option>
+            <option value="custom">Custom range</option>
+            <option value="all">All records</option>
+          </select>
+        </label>
+        <label class="field compact">
+          <span>Reference date</span>
+          <input id="referenceDate" type="date" />
+        </label>
+        <label class="field compact custom-range-field hidden">
+          <span>From date</span>
+          <input id="rangeStartDate" type="date" />
+        </label>
+        <label class="field compact custom-range-field hidden">
+          <span>To date</span>
+          <input id="rangeEndDate" type="date" />
+        </label>
+        <label class="field compact currency-field">
+          <span>Currency</span>
+          <input id="currencyInput" type="text" maxlength="3" value="$" aria-label="Currency symbol" />
+        </label>
+      </section>
+
+      <section class="summary-grid" aria-label="Dashboard summaries">
+        <article class="metric-card primary">
+          <span>Net income</span>
+          <strong id="netIncome">$0.00</strong>
+          <small id="periodLabel">This week</small>
+        </article>
+        <article class="metric-card">
+          <span>Gross income</span>
+          <strong id="grossIncome">$0.00</strong>
+          <small id="entryCount">0 days</small>
+        </article>
+        <article class="metric-card">
+          <span>Total expenses</span>
+          <strong id="totalExpenses">$0.00</strong>
+          <small id="expenseShare">0% of gross</small>
+        </article>
+        <article class="metric-card">
+          <span>Business km</span>
+          <strong id="businessKm">0.0 km</strong>
+          <small id="costPerKm">$0.00 cost/km</small>
+        </article>
+        <article class="metric-card">
+          <span>Income per hour</span>
+          <strong id="incomePerHour">$0.00</strong>
+          <small id="hoursWorked">0.0 hours</small>
+        </article>
+        <article class="metric-card">
+          <span>Profit per hour</span>
+          <strong id="profitPerHour">$0.00</strong>
+          <small id="profitPerKm">$0.00 profit/km</small>
+        </article>
+      </section>
+
+      <section class="content-grid">
+        <form class="entry-panel" id="dayForm">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Daily entry</p>
+              <h2 id="dayFormTitle">Add today</h2>
+            </div>
+            <button class="button secondary hidden" id="cancelDayEditButton" type="button">Cancel edit</button>
+          </div>
+
+          <div class="form-grid daily-grid">
+            <label class="field">
+              <span>Date</span>
+              <input id="date" name="date" type="date" required />
+            </label>
+            <label class="field">
+              <span>Hours worked</span>
+              <input id="hours" name="hours" type="number" min="0" step="0.25" placeholder="0.0" />
+            </label>
+            <label class="field">
+              <span>Odometer start</span>
+              <input id="odometerStart" name="odometerStart" type="number" min="0" step="0.1" placeholder="km" />
+            </label>
+            <label class="field">
+              <span>Odometer end</span>
+              <input id="odometerEnd" name="odometerEnd" type="number" min="0" step="0.1" placeholder="km" />
+            </label>
+            <label class="field">
+              <span>Fuel</span>
+              <input id="fuel" name="fuel" type="number" min="0" step="0.01" placeholder="0.00" />
+            </label>
+            <div class="platform-section">
+              <div class="platform-heading">
+                <span>App income</span>
+              </div>
+              <div class="platform-labels" aria-hidden="true">
+                <span>App</span>
+                <span>Income</span>
+                <span>Trips</span>
+              </div>
+              <div class="platform-list" id="platformList">
+                <div class="platform-row" data-platform="Uber">
+                  <input value="Uber" aria-label="Income app" disabled />
+                  <input class="platform-amount" type="number" min="0" step="0.01" placeholder="0.00" aria-label="Uber income amount" />
+                  <input class="platform-trips" type="number" min="0" step="1" placeholder="Trips" aria-label="Uber trips" />
+                </div>
+                <div class="platform-row" data-platform="Lyft">
+                  <input value="Lyft" aria-label="Income app" disabled />
+                  <input class="platform-amount" type="number" min="0" step="0.01" placeholder="0.00" aria-label="Lyft income amount" />
+                  <input class="platform-trips" type="number" min="0" step="1" placeholder="Trips" aria-label="Lyft trips" />
+                </div>
+              </div>
+            </div>
+            <div class="total-strip" aria-live="polite">
+              <span>Total gross earnings and trips</span>
+              <strong id="dailyGrossPreview">$0.00 / 0 trips</strong>
+            </div>
+            <label class="field notes">
+              <span>Notes</span>
+              <textarea id="notes" name="notes" rows="2" placeholder="Optional"></textarea>
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <p id="dailyKmHint">Business km is calculated from odometer start and end.</p>
+            <button class="button" type="submit">Save day</button>
+          </div>
+          <p class="save-status" id="daySaveStatus" aria-live="polite"></p>
+        </form>
+
+        <form class="entry-panel" id="expenseForm">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Other costs</p>
+              <h2 id="expenseFormTitle">Add expense</h2>
+            </div>
+            <button class="button secondary hidden" id="cancelExpenseEditButton" type="button">Cancel edit</button>
+          </div>
+
+          <div class="form-grid expense-grid">
+            <label class="field">
+              <span>Date</span>
+              <input id="expenseDate" name="date" type="date" required />
+            </label>
+            <label class="field">
+              <span>Expense type</span>
+              <select id="expenseCategory" name="category">
+                <option value="insurance">Insurance</option>
+                <option value="carPayment">Car payment or lease</option>
+                <option value="oil">Oil change</option>
+                <option value="maintenance">Maintenance or repair</option>
+                <option value="parkingTolls">Parking or tolls</option>
+                <option value="etr407">ETR 407</option>
+                <option value="parking">Parking</option>
+                <option value="phoneData">Phone and data</option>
+                <option value="cleaning">Cleaning</option>
+                <option value="washingCar">Washing car</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Amount</span>
+              <input id="expenseAmount" name="amount" type="number" min="0" step="0.01" placeholder="0.00" />
+            </label>
+            <label class="field">
+              <span>How often</span>
+              <select id="expenseFrequency" name="frequency">
+                <option value="one-time">One time</option>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </label>
+            <p class="field-help" id="frequencyHelp">
+              Monthly and yearly costs are added automatically to each report period. One-time costs count only when their date is inside the selected period.
+            </p>
+            <label class="field notes">
+              <span>Notes</span>
+              <textarea id="expenseNotes" name="notes" rows="2" placeholder="Optional"></textarea>
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <p>Use this for insurance, lease, repairs, phone, and other non-daily costs.</p>
+            <button class="button" type="submit">Save expense</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="content-grid lower-grid">
+        <aside class="insights-panel" aria-label="Breakdown">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Income mix</p>
+              <h2>Apps used</h2>
+            </div>
+          </div>
+          <div class="expense-list platform-breakdown" id="platformBreakdown"></div>
+          <div class="section-heading stacked-heading">
+            <div>
+              <p class="eyebrow">Expense mix</p>
+              <h2>Where money went</h2>
+            </div>
+          </div>
+          <div class="expense-list" id="expenseBreakdown"></div>
+          <div class="rate-box">
+            <div>
+              <span>Trips</span>
+              <strong id="tripTotal">0</strong>
+            </div>
+            <div>
+              <span>Average per trip</span>
+              <strong id="avgPerTrip">$0.00</strong>
+            </div>
+          </div>
+        </aside>
+
+        <section class="history-panel embedded-history">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Saved records</p>
+              <h2>History</h2>
+            </div>
+            <label class="field search-field">
+              <span>Search notes</span>
+              <input id="searchInput" type="search" placeholder="Search" />
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Gross</th>
+                  <th>Trips</th>
+                  <th>Expenses</th>
+                  <th>Net</th>
+                  <th>Hours</th>
+                  <th>Km</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="recordsTable"></tbody>
+            </table>
+            <p class="empty-state hidden" id="emptyState">No records yet. Add a day or load the sample data.</p>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="./app.js?v=20260819-custom-range"></script>
+  </body>
+</html>
