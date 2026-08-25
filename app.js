@@ -70,7 +70,7 @@ const categoryDefaults = {
 };
 
 const storedDailyRecords = loadList(DAILY_STORAGE_KEY);
-let dailyRecords = storedDailyRecords.map(normalizeDailyRecord);
+let dailyRecords = consolidateDailyRecords(storedDailyRecords.map(normalizeDailyRecord));
 let expenses = [...legacyExpensesFromDailyRecords(storedDailyRecords), ...loadList(EXPENSE_STORAGE_KEY).map(normalizeExpense)];
 let editingDayId = null;
 let editingExpenseId = null;
@@ -82,7 +82,11 @@ const moneyFormatter = new Intl.NumberFormat(undefined, {
 });
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function makeId() {
@@ -159,16 +163,28 @@ function cloudHeaders(extra = {}) {
 
 async function cloudRequest(path, options = {}) {
   if (!session) throw new Error("Sign in first.");
-  const response = await fetch(`${SUPABASE_URL}${path}`, {
+  let response = await fetch(`${SUPABASE_URL}${path}`, {
     ...options,
     headers: cloudHeaders(options.headers || {}),
   });
+  if (response.status === 401 && session.refresh_token) {
+    await refreshSession();
+    response = await fetch(`${SUPABASE_URL}${path}`, {
+      ...options,
+      headers: cloudHeaders(options.headers || {}),
+    });
+  }
   if (!response.ok) {
     const message = await response.text();
+    if (message.includes("JWT expired") && !session.refresh_token) {
+      saveSession(null);
+      throw new Error("Login expired. Please sign in again.");
+    }
     throw new Error(message || `Request failed: ${response.status}`);
   }
   if (response.status === 204) return null;
-  return response.json();
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
 }
 
 async function authRequest(path, body) {
@@ -186,6 +202,23 @@ async function authRequest(path, body) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error_description || result.msg || result.message || "Authentication failed.");
   return result;
+}
+
+async function refreshSession() {
+  if (!session?.refresh_token) throw new Error("Login expired. Please sign in again.");
+  const result = await authRequest("/auth/v1/token?grant_type=refresh_token", {
+    refresh_token: session.refresh_token,
+  });
+  saveSession(sessionFromAuthResult(result));
+}
+
+function sessionFromAuthResult(result) {
+  return {
+    access_token: result.access_token,
+    refresh_token: result.refresh_token,
+    expires_at: result.expires_at,
+    user: result.user,
+  };
 }
 
 async function loadUserFromToken(accessToken) {
@@ -389,6 +422,44 @@ function normalizeDailyRecord(record) {
     fuel: numeric(record.fuel),
     notes: record.notes || "",
   };
+}
+
+function mergePlatformRows(existingPlatforms, newPlatforms) {
+  const byName = new Map(existingPlatforms.map((platform) => [platform.name.toLowerCase(), { ...platform }]));
+  newPlatforms.forEach((platform) => {
+    const key = platform.name.toLowerCase();
+    if (!key) return;
+    const current = byName.get(key) || { name: platform.name, amount: 0, trips: 0 };
+    byName.set(key, {
+      name: current.name || platform.name,
+      amount: numeric(platform.amount) > 0 ? numeric(platform.amount) : numeric(current.amount),
+      trips: numeric(platform.trips) > 0 ? numeric(platform.trips) : numeric(current.trips),
+    });
+  });
+  return [...byName.values()].filter((platform) => numeric(platform.amount) > 0 || numeric(platform.trips) > 0);
+}
+
+function mergeDailyRecord(existingRecord, newRecord) {
+  const notes = [existingRecord.notes, newRecord.notes]
+    .map((note) => String(note || "").trim())
+    .filter(Boolean);
+  return normalizeDailyRecord({
+    ...existingRecord,
+    platforms: mergePlatformRows(existingRecord.platforms || [], newRecord.platforms || []),
+    hours: numeric(newRecord.hours) > 0 ? newRecord.hours : existingRecord.hours,
+    odometerStart: numeric(newRecord.odometerStart) > 0 ? newRecord.odometerStart : existingRecord.odometerStart,
+    odometerEnd: numeric(newRecord.odometerEnd) > 0 ? newRecord.odometerEnd : existingRecord.odometerEnd,
+    fuel: numeric(existingRecord.fuel) + numeric(newRecord.fuel),
+    notes: [...new Set(notes)].join(" | "),
+  });
+}
+
+function consolidateDailyRecords(records) {
+  return records.reduce((mergedRecords, record) => {
+    const existingIndex = mergedRecords.findIndex((item) => item.date === record.date);
+    if (existingIndex === -1) return [...mergedRecords, record];
+    return mergedRecords.map((item, index) => (index === existingIndex ? mergeDailyRecord(item, record) : item));
+  }, []);
 }
 
 function normalizeExpense(expense) {
@@ -627,7 +698,7 @@ async function loadCloudData() {
     cloudRequest("/rest/v1/daily_entries?select=*,platform_earnings(*)&order=work_date.desc"),
     cloudRequest("/rest/v1/expenses?select=*&order=expense_date.desc"),
   ]);
-  dailyRecords = cloudDays.map(dailyFromCloud);
+  dailyRecords = consolidateDailyRecords(cloudDays.map(dailyFromCloud));
   expenses = cloudExpenses.map(expenseFromCloud);
   saveAll();
   render();
@@ -898,7 +969,7 @@ function fillExpenseForm(expense) {
 
 function resetDayForm({ keepStatus = false } = {}) {
   dayForm.reset();
-  dayForm.elements.date.value = referenceDate.value || todayISO();
+  dayForm.elements.date.value = todayISO();
   renderPlatformRows([]);
   editingDayId = null;
   dayFormTitle.textContent = "Add today";
@@ -911,8 +982,12 @@ function resetDayForm({ keepStatus = false } = {}) {
 function restoreDayDraft() {
   const draft = loadDayDraft();
   if (!draftHasUsefulData(draft)) return false;
+  if (draft.date && draft.date !== todayISO()) {
+    clearDayDraft();
+    return false;
+  }
 
-  dayForm.elements.date.value = draft.date || referenceDate.value || todayISO();
+  dayForm.elements.date.value = draft.date || todayISO();
   dayForm.elements.hours.value = draft.hours || "";
   dayForm.elements.odometerStart.value = draft.odometerStart || "";
   dayForm.elements.odometerEnd.value = draft.odometerEnd || "";
@@ -927,7 +1002,7 @@ function restoreDayDraft() {
 
 function resetExpenseForm() {
   expenseForm.reset();
-  expenseForm.elements.date.value = referenceDate.value || todayISO();
+  expenseForm.elements.date.value = todayISO();
   editingExpenseId = null;
   expenseFormTitle.textContent = "Add expense";
   cancelExpenseEditButton.classList.add("hidden");
@@ -1100,14 +1175,18 @@ dayForm.addEventListener("submit", async (event) => {
     return;
   }
   try {
+    const sameDateRecord = !editingDayId ? dailyRecords.find((item) => item.date === record.date) : null;
+    const savedRecord = sameDateRecord ? mergeDailyRecord(sameDateRecord, record) : record;
     dailyRecords = editingDayId
       ? dailyRecords.map((item) => (item.id === editingDayId ? record : item))
-      : [...dailyRecords, record];
+      : sameDateRecord
+        ? dailyRecords.map((item) => (item.id === sameDateRecord.id ? savedRecord : item))
+        : [...dailyRecords, savedRecord];
     saveAll();
-    await saveDailyToCloud(record);
+    await saveDailyToCloud(savedRecord);
     clearDayDraft();
     resetDayForm({ keepStatus: true });
-    daySaveStatus.textContent = `Saved to History: ${record.date}, ${currency(record.gross)}, ${record.trips} ${record.trips === 1 ? "trip" : "trips"}.`;
+    daySaveStatus.textContent = `${sameDateRecord ? "Updated" : "Saved to"} History: ${savedRecord.date}, ${currency(savedRecord.gross)}, ${savedRecord.trips} ${savedRecord.trips === 1 ? "trip" : "trips"}.`;
     setCloudStatus(session ? "Saved to cloud." : "Saved in this browser.", "success");
     render();
   } catch (error) {
@@ -1207,7 +1286,7 @@ authForm.addEventListener("submit", async (event) => {
     const credentials = readAuthFields();
     setCloudStatus("Signing in...", "loading");
     const result = await authRequest("/auth/v1/token?grant_type=password", credentials);
-    saveSession({ access_token: result.access_token, user: result.user });
+    saveSession(sessionFromAuthResult(result));
     authPassword.value = "";
     await loadCloudData();
     setCloudStatus("Signed in and cloud records loaded.", "success");
@@ -1222,7 +1301,7 @@ signUpButton.addEventListener("click", async () => {
     setCloudStatus("Creating account...", "loading");
     const result = await authRequest("/auth/v1/signup", credentials);
     if (result.access_token && result.user) {
-      saveSession({ access_token: result.access_token, user: result.user });
+      saveSession(sessionFromAuthResult(result));
       authPassword.value = "";
       await pushLocalDataToCloud();
     } else {
@@ -1283,7 +1362,7 @@ clearButton.addEventListener("click", async () => {
 
 const settings = loadSettings();
 periodSelect.value = settings.period || "week";
-referenceDate.value = settings.referenceDate || todayISO();
+referenceDate.value = todayISO();
 rangeStartDate.value = settings.rangeStartDate || referenceDate.value || todayISO();
 rangeEndDate.value = settings.rangeEndDate || referenceDate.value || todayISO();
 currencyInput.value = settings.currency || "$";
