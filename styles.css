@@ -266,7 +266,7 @@ textarea {
 }
 
 .lower-grid {
-  grid-template-columns: minmax(300px, 0.72fr) minmax(0, 1.28fr);
+  grid-template-columns: minmax(260px, 0.55fr) minmax(0, 1.45fr);
   margin-top: 18px;
 }
 
@@ -524,14 +524,13 @@ textarea {
 }
 
 .table-wrap {
-  overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
 }
 
 table {
   width: 100%;
-  min-width: 780px;
+  table-layout: fixed;
   border-collapse: collapse;
   background: #fff;
 }
@@ -539,15 +538,49 @@ table {
 th,
 td {
   border-bottom: 1px solid var(--line);
-  padding: 12px;
+  padding: 10px 8px;
   text-align: right;
   vertical-align: middle;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 th:first-child,
 td:first-child {
   text-align: left;
+}
+
+th:nth-child(1),
+td:nth-child(1) {
+  width: 105px;
+}
+
+th:nth-child(2),
+td:nth-child(2) {
+  width: 30%;
+  text-align: left;
+}
+
+th:nth-child(3),
+td:nth-child(3),
+th:nth-child(5),
+td:nth-child(5),
+th:nth-child(6),
+td:nth-child(6) {
+  width: 92px;
+}
+
+th:nth-child(4),
+td:nth-child(4),
+th:nth-child(7),
+td:nth-child(7),
+th:nth-child(8),
+td:nth-child(8) {
+  width: 58px;
+}
+
+th:nth-child(9),
+td:nth-child(9) {
+  width: 96px;
 }
 
 th {
@@ -567,7 +600,7 @@ tbody tr:last-child td {
 .row-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
 }
 
 .text-button {
