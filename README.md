@@ -1,14 +1,14 @@
-[README.md](https://github.com/user-attachments/files/31315795/README.md)
 # Driver Ledger MVP
 
 Driver Ledger is a simple web app for self-employed rideshare drivers who use their own car. It tracks daily income, trips, hours, kilometres, fuel, and other business expenses so the driver can see gross income, expenses, and net profit.
 
-This document records what was built and how the current local + Supabase setup works.
+This document records what was built, what problems were found, and how the current GitHub + Vercel + Supabase setup works.
 
 ## Current Status
 
-- App code runs locally on the laptop.
-- Local app URL: `http://localhost:3000`
+- App code is stored in GitHub.
+- Local app URL for laptop testing: `http://localhost:3000`
+- Live Vercel app URL: `https://driver-ledger-ruby.vercel.app`
 - Cloud database/auth provider: Supabase
 - Supabase project ref: `pzntppeunrpxerbxjdma`
 - Supabase project URL: `https://pzntppeunrpxerbxjdma.supabase.co`
@@ -17,12 +17,27 @@ This document records what was built and how the current local + Supabase setup 
 
 Important: Supabase stores the data only after the user signs in and sync works. Before sign-in, records are saved in browser local storage on the laptop.
 
+## Architecture
+
+Current production-style setup:
+
+```text
+GitHub -> Vercel website -> Supabase database/auth
+```
+
+- GitHub stores the app code.
+- Vercel hosts the live website.
+- Supabase stores users, daily entries, platform earnings, and expenses.
+- The laptop local server is only for local testing.
+
 ## Files
 
 - `index.html` - app page structure
 - `styles.css` - app design and layout
 - `app.js` - app logic, calculations, local storage, Supabase sync
 - `server.js` - small local server for `http://localhost:3000`
+- `vercel.json` - Vercel hosting config for the static website
+- `.vercelignore` - tells Vercel not to deploy the local-only server file
 - `README.md` - this setup/reference document
 
 ## How To Run Locally
@@ -209,7 +224,7 @@ When the app is published online later, turn Confirm email back ON and update Su
 
 ## Supabase Redirect URL
 
-For local testing, Supabase URL Configuration should use:
+For local testing, Supabase URL Configuration can use:
 
 ```text
 http://localhost:3000
@@ -219,11 +234,100 @@ This means Supabase sends the browser back to the app running on the same laptop
 
 Important: `localhost` does not mean Supabase can access the laptop. It means "this same device" in the browser.
 
-For public use later, replace it with the real website URL, for example:
+For the current Vercel deployment, Supabase URL Configuration should use:
 
 ```text
-https://driverledger.ca
+https://driver-ledger-ruby.vercel.app
 ```
+
+This URL should be set in both:
+
+- Site URL
+- Redirect URLs
+
+For public use later with a custom domain, replace it with the final domain, for example `https://driverledger.ca`.
+
+## Challenges And Solutions
+
+### 1. Browser storage could be erased
+
+Problem:
+
+The first version saved records in browser local storage. If Chrome data was cleared, local-only records could be lost.
+
+Solution:
+
+Supabase was added as the cloud database. After sign-in, saved records sync to Supabase instead of depending only on browser storage.
+
+### 2. Email confirmation caused login problems
+
+Problem:
+
+Supabase confirmation links expired, opened the wrong location, or showed `Email not confirmed`.
+
+Solution:
+
+For MVP testing, Confirm email was turned OFF in Supabase. Old unconfirmed users were deleted or manually confirmed. Supabase redirect settings were updated after Vercel deployment.
+
+### 3. Supabase session token expired
+
+Problem:
+
+The app showed `JWT expired` after an old Supabase login token expired.
+
+Solution:
+
+The app was updated to save Supabase refresh tokens and refresh the session when needed.
+
+### 4. Supabase returned empty success responses
+
+Problem:
+
+Sync showed `Unexpected end of JSON input` because some successful Supabase requests returned an empty body.
+
+Solution:
+
+The cloud request handler was updated to accept empty successful responses instead of trying to parse them as JSON.
+
+### 5. `localhost` stopped working
+
+Problem:
+
+The local app URL `http://localhost:3000` only worked while the laptop server was running. If the server stopped, Chrome showed `localhost refused to connect`.
+
+Solution:
+
+The app was deployed to Vercel, creating a real website URL that does not require starting `server.js` manually.
+
+### 6. Vercel deployed the local server incorrectly
+
+Problem:
+
+Vercel tried to run `server.js` as a serverless function and showed `FUNCTION_INVOCATION_FAILED`.
+
+Solution:
+
+`vercel.json` was added to serve the project as a static website, and `.vercelignore` was added so Vercel ignores the local-only `server.js` file.
+
+### 7. Old daily draft changed today's date
+
+Problem:
+
+The daily entry form showed an old date because an unsaved draft restored an older entry.
+
+Solution:
+
+The app now clears old drafts when the draft date is not today's date, so the daily entry starts on the current date.
+
+### 8. Same-day records split into two rows
+
+Problem:
+
+Saving income and fuel separately for the same day created two history rows.
+
+Solution:
+
+The app now merges same-date daily entries so income, fuel, hours, trips, and kilometres stay in one daily row.
 
 ## Auth Troubleshooting
 
@@ -288,11 +392,10 @@ Common reasons it stops:
 
 Recommended next steps:
 
-1. Finish and test the local MVP.
-2. Confirm Supabase login and cloud sync works.
-3. Move code to GitHub.
-4. Deploy the web app online.
-5. Change Supabase redirect URL from `localhost` to the real website.
-6. Later consider mobile app packaging for Apple App Store and Google Play.
+1. Continue testing the Vercel live app.
+2. Confirm Supabase login and cloud sync work from the live Vercel URL.
+3. Add a custom domain later, for example `driverledger.ca`.
+4. Improve reports and expense categories based on real driver usage.
+5. Later consider mobile app packaging for Apple App Store and Google Play.
 
-GitHub will store the code. Supabase will store the data.
+GitHub stores the code. Vercel hosts the website. Supabase stores the data.
