@@ -77,7 +77,7 @@ Other expenses:
 - Car payment or lease
 - Oil change
 - Maintenance or repair
-- Parking or tolls
+- Tolls
 - ETR 407
 - Parking
 - Phone and data
