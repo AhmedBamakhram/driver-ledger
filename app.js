@@ -12,7 +12,7 @@ const expenseCategories = {
   carPayment: ["Car payment or lease", "#9b3d2e"],
   oil: ["Oil change", "#a66800"],
   maintenance: ["Maintenance or repair", "#245e9c"],
-  parkingTolls: ["Parking or tolls", "#587042"],
+  tolls: ["Tolls", "#587042"],
   etr407: ["ETR 407", "#7d6227"],
   parking: ["Parking", "#4f7b45"],
   phoneData: ["Phone and data", "#2f6f86"],
@@ -61,7 +61,7 @@ const categoryDefaults = {
   phoneData: "monthly",
   oil: "one-time",
   maintenance: "one-time",
-  parkingTolls: "one-time",
+  tolls: "one-time",
   etr407: "one-time",
   parking: "one-time",
   cleaning: "one-time",
@@ -463,12 +463,13 @@ function consolidateDailyRecords(records) {
 }
 
 function normalizeExpense(expense) {
+  const category = expense.category === "parkingTolls" ? "tolls" : expense.category;
   if (expense.type === "expense") {
     return {
       id: expense.id || makeId(),
       type: "expense",
       date: expense.date || todayISO(),
-      category: expense.category || "other",
+      category: category || "other",
       amount: numeric(expense.amount),
       frequency: expense.frequency || "one-time",
       notes: expense.notes || "",
