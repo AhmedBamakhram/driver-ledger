@@ -152,6 +152,16 @@ function saveAll() {
   localStorage.setItem(EXPENSE_STORAGE_KEY, JSON.stringify(expenses));
 }
 
+function clearLocalRecords() {
+  dailyRecords = [];
+  expenses = [];
+  saveAll();
+  clearDayDraft();
+  resetDayForm();
+  resetExpenseForm();
+  render();
+}
+
 function cloudHeaders(extra = {}) {
   return {
     apikey: SUPABASE_KEY,
@@ -1315,7 +1325,8 @@ signUpButton.addEventListener("click", async () => {
 
 signOutButton.addEventListener("click", () => {
   saveSession(null);
-  setCloudStatus("Signed out. Records will save in this browser.", "success");
+  clearLocalRecords();
+  setCloudStatus("Signed out. Records hidden on this device. Sign in again to load Supabase records.", "success");
 });
 
 syncButton.addEventListener("click", async () => {
