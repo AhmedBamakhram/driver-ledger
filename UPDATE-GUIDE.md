@@ -2,7 +2,7 @@
 
 ## Deploy in this order
 
-1. Export your existing records before updating.
+1. Export existing records before updating.
 2. Open the existing Supabase project, SQL Editor. Run `upgrade-20261029.sql`. This adds two expense columns and an atomic daily-save function. It does not remove records. Existing RLS policies still apply.
 3. Upload `app.js`, `index.html`, and `styles.css` together to the existing GitHub repository. Keep the existing Vercel configuration.
 4. Wait for Vercel's deployment to be Ready, then reload the live website.
