@@ -604,6 +604,10 @@ tbody tr:last-child td {
   white-space: nowrap;
 }
 
+.record-sync { display: block; margin-top: 5px; font-size: 0.72rem; color: var(--muted); }
+#reportComparison { flex: 1 1 100%; margin: 0; font-size: 0.9rem; }
+button:disabled { opacity: 0.55; cursor: wait; }
+
 .text-button {
   border: 0;
   background: transparent;

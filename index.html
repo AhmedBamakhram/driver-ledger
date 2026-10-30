@@ -8,7 +8,7 @@
       name="description"
       content="A simple local rideshare income and expense tracker for self-employed drivers."
     />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20261029" />
   </head>
   <body>
     <main class="app-shell">
@@ -67,6 +67,13 @@
         </label>
       </section>
 
+      <section class="controls-band" aria-label="Report options">
+        <button type="button" class="button secondary" id="previousPeriod" title="Previous period" aria-label="Previous period">&larr;</button>
+        <button type="button" class="button secondary" id="nextPeriod" title="Next period" aria-label="Next period">&rarr;</button>
+        <label class="field compact"><span>Expense reporting</span><select id="reportBasis"><option value="payments">Actual payments</option><option value="coverage">Spread over coverage</option></select></label>
+        <button type="button" class="button secondary" id="downloadReport">Download report</button>
+        <p id="reportComparison" aria-live="polite"></p>
+      </section>
       <section class="summary-grid" aria-label="Dashboard summaries">
         <article class="metric-card primary">
           <span>Net income</span>
@@ -209,9 +216,12 @@
               <select id="expenseFrequency" name="frequency">
                 <option value="one-time">One time</option>
                 <option value="monthly">Monthly</option>
+                <option value="four-monthly">Every 4 months</option>
                 <option value="yearly">Yearly</option>
               </select>
             </label>
+            <label class="field"><span>Coverage start (optional)</span><input name="coverageStart" type="date" /></label>
+            <label class="field"><span>Coverage end (optional)</span><input name="coverageEnd" type="date" /></label>
             <p class="field-help" id="frequencyHelp">
               Monthly and yearly costs are added automatically to each report period. One-time costs count only when their date is inside the selected period.
             </p>
@@ -289,6 +299,6 @@
         </section>
       </section>
     </main>
-    <script src="./app.js?v=20260827-clear-on-signout"></script>
+    <script src="./app.js?v=20261029-reports-sync"></script>
   </body>
 </html>

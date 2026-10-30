@@ -70,11 +70,28 @@ const categoryDefaults = {
 };
 
 const storedDailyRecords = loadList(DAILY_STORAGE_KEY);
-let dailyRecords = consolidateDailyRecords(storedDailyRecords.map(normalizeDailyRecord));
+let dailyRecords = storedDailyRecords.map(normalizeDailyRecord);
 let expenses = [...legacyExpensesFromDailyRecords(storedDailyRecords), ...loadList(EXPENSE_STORAGE_KEY).map(normalizeExpense)];
 let editingDayId = null;
 let editingExpenseId = null;
 let session = loadSession();
+const PENDING_KEY = "driver-ledger-pending-v2";
+let pending = loadList(PENDING_KEY);
+let saving = false;
+let refreshInFlight = null;
+const savingIds = new Set();
+
+function persistPending() { localStorage.setItem(PENDING_KEY, JSON.stringify(pending)); }
+function queueSave(kind, record, deleted = false) {
+  const owner = session?.user.id || "guest";
+  pending = pending.filter((p) => !(p.owner === owner && p.kind === kind && p.record.id === record.id));
+  pending.push({ owner, kind, record, deleted, revision: makeId() });
+  persistPending();
+}
+function syncLabel(record) {
+  if (savingIds.has(record.id)) return "Saving...";
+  return pending.some((p) => p.record.id === record.id) ? "Not synced" : session ? "Saved to cloud" : "Saved locally";
+}
 
 const moneyFormatter = new Intl.NumberFormat(undefined, {
   minimumFractionDigits: 2,
@@ -177,7 +194,7 @@ async function cloudRequest(path, options = {}) {
     ...options,
     headers: cloudHeaders(options.headers || {}),
   });
-  if (response.status === 401 && session.refresh_token) {
+  if (response.status === 401 && session?.refresh_token) {
     await refreshSession();
     response = await fetch(`${SUPABASE_URL}${path}`, {
       ...options,
@@ -186,7 +203,7 @@ async function cloudRequest(path, options = {}) {
   }
   if (!response.ok) {
     const message = await response.text();
-    if (message.includes("JWT expired") && !session.refresh_token) {
+    if (message.includes("JWT expired") && !session?.refresh_token) {
       saveSession(null);
       throw new Error("Login expired. Please sign in again.");
     }
@@ -216,10 +233,15 @@ async function authRequest(path, body) {
 
 async function refreshSession() {
   if (!session?.refresh_token) throw new Error("Login expired. Please sign in again.");
+  if (refreshInFlight) return refreshInFlight;
+  const original = session;
+  refreshInFlight = (async () => {
   const result = await authRequest("/auth/v1/token?grant_type=refresh_token", {
     refresh_token: session.refresh_token,
   });
-  saveSession(sessionFromAuthResult(result));
+  if (session === original) saveSession(sessionFromAuthResult(result));
+  })();
+  try { await refreshInFlight; } finally { refreshInFlight = null; }
 }
 
 function sessionFromAuthResult(result) {
@@ -252,6 +274,7 @@ function saveSettings() {
       rangeStartDate: rangeStartDate.value,
       rangeEndDate: rangeEndDate.value,
       currency: currencyInput.value || "$",
+      reportBasis: document.querySelector("#reportBasis").value,
     }),
   );
 }
@@ -313,7 +336,56 @@ function dateFromISO(dateString) {
 }
 
 function daysBetween(start, end) {
-  return Math.max(1, Math.round((end - start) / 86400000) + 1);
+  const serial = (d) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  return Math.max(0, Math.round((serial(end) - serial(start)) / 86400000) + 1);
+}
+
+function addMonthsClamped(date, months) {
+  const target = new Date(date.getFullYear(), date.getMonth() + months, 1, 12);
+  target.setDate(Math.min(date.getDate(), new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()));
+  return target;
+}
+
+function moveReport(direction) {
+  const date = dateFromISO(referenceDate.value);
+  let next;
+  if (periodSelect.value === "month" || periodSelect.value === "year") next = addMonthsClamped(date, direction * (periodSelect.value === "year" ? 12 : 1));
+  else { next = new Date(date); next.setDate(next.getDate() + direction * (periodSelect.value === "week" ? 7 : 1)); }
+  referenceDate.value = localDateString(next);
+  render();
+}
+
+function localDateString(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function comparisonRange() {
+  const [start, end] = getPeriodRange();
+  if (periodSelect.value === "all") return null;
+  if (periodSelect.value === "month") { const d = addMonthsClamped(start, -1); return [startOfMonth(d), endOfMonth(d)]; }
+  if (periodSelect.value === "year") { const d = addMonthsClamped(start, -12); return [startOfYear(d), endOfYear(d)]; }
+  const previousEnd = new Date(start); previousEnd.setDate(previousEnd.getDate() - 1); previousEnd.setHours(23, 59, 59, 999);
+  const previousStart = new Date(start); previousStart.setDate(previousStart.getDate() - daysBetween(start, end)); previousStart.setHours(0, 0, 0, 0);
+  return [previousStart, previousEnd];
+}
+
+function renderReportComparison() {
+  const disabled = ["all", "custom"].includes(periodSelect.value);
+  document.querySelector("#previousPeriod").disabled = disabled;
+  document.querySelector("#nextPeriod").disabled = disabled;
+  const previous = comparisonRange();
+  const label = document.querySelector("#reportComparison");
+  if (!previous) { label.textContent = "All saved records"; return; }
+  const current = selectedSummary(), before = selectedSummary(previous);
+  label.textContent = `Compared with ${localDateString(previous[0])} to ${localDateString(previous[1])}: income ${currency(current.gross - before.gross)}, expenses ${currency(current.expenses - before.expenses)}, net ${currency(current.net - before.net)}`;
+}
+
+function downloadReport() {
+  const summary = selectedSummary();
+  const rows = [["Report", periodText()], ["Expense basis", document.querySelector("#reportBasis").value], ["Gross income", summary.gross], ["Expenses", summary.expenses], ["Net income", summary.net], ["Hours", summary.hours], ["Business km", summary.km], ["Trips", summary.trips], ...Object.entries(summary.expenseBreakdown).map(([key, value]) => [expenseCategories[key]?.[0] || key, value])];
+  const csv = rows.map((row) => row.map((v) => `"${String(v).replaceAll('"', '""')}"`).join(",")).join("\r\n");
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  const link = document.createElement("a"); link.href = url; link.download = `driver-ledger-report-${todayISO()}.csv`; link.click(); URL.revokeObjectURL(url);
 }
 
 function startOfWeek(date) {
@@ -459,7 +531,7 @@ function mergeDailyRecord(existingRecord, newRecord) {
     hours: numeric(newRecord.hours) > 0 ? newRecord.hours : existingRecord.hours,
     odometerStart: numeric(newRecord.odometerStart) > 0 ? newRecord.odometerStart : existingRecord.odometerStart,
     odometerEnd: numeric(newRecord.odometerEnd) > 0 ? newRecord.odometerEnd : existingRecord.odometerEnd,
-    fuel: numeric(existingRecord.fuel) + numeric(newRecord.fuel),
+    fuel: numeric(newRecord.fuel) > 0 ? numeric(newRecord.fuel) : numeric(existingRecord.fuel),
     notes: [...new Set(notes)].join(" | "),
   });
 }
@@ -482,6 +554,8 @@ function normalizeExpense(expense) {
       category: category || "other",
       amount: numeric(expense.amount),
       frequency: expense.frequency || "one-time",
+      coverageStart: expense.coverageStart || "",
+      coverageEnd: expense.coverageEnd || "",
       notes: expense.notes || "",
     };
   }
@@ -538,6 +612,8 @@ function expenseFromCloud(row) {
     category: row.category,
     amount: row.amount,
     frequency: row.frequency,
+    coverageStart: row.coverage_start,
+    coverageEnd: row.coverage_end,
     notes: row.notes,
   });
 }
@@ -563,6 +639,8 @@ function expenseToCloud(expense) {
     category: expense.category,
     amount: expense.amount,
     frequency: expense.frequency,
+    coverage_start: expense.coverageStart || null,
+    coverage_end: expense.coverageEnd || null,
     notes: expense.notes || "",
   };
 }
@@ -595,14 +673,22 @@ function recordInPeriod(record) {
   return date >= start && date <= end;
 }
 
-function recurringExpenseAmount(expense) {
-  const [start, end] = getPeriodRange();
-  if (expense.frequency === "one-time") return recordInPeriod(expense) ? expense.amount : 0;
-  if (periodSelect.value === "all") return expense.amount;
-
-  const periodDays = daysBetween(start, end);
-  const dailyAmount = expense.frequency === "yearly" ? expense.amount / 365 : expense.amount / 30.4375;
-  return dailyAmount * periodDays;
+function recurringExpenseAmount(expense, range = getPeriodRange()) {
+  const [start, end] = range;
+  const paid = dateFromISO(expense.date);
+  if (document.querySelector("#reportBasis").value === "payments") return paid >= start && paid <= end ? expense.amount : 0;
+  const coverageStart = dateFromISO(expense.coverageStart || expense.date);
+  let coverageEnd;
+  if (expense.coverageEnd) coverageEnd = dateFromISO(expense.coverageEnd);
+  else {
+    const months = { monthly: 1, "four-monthly": 4, yearly: 12 }[expense.frequency];
+    if (!months) return paid >= start && paid <= end ? expense.amount : 0;
+    coverageEnd = addMonthsClamped(coverageStart, months);
+    coverageEnd.setDate(coverageEnd.getDate() - 1);
+  }
+  const overlapStart = new Date(Math.max(start, coverageStart));
+  const overlapEnd = new Date(Math.min(end, coverageEnd));
+  return expense.amount * daysBetween(overlapStart, overlapEnd) / daysBetween(coverageStart, coverageEnd);
 }
 
 function periodText() {
@@ -630,8 +716,8 @@ function periodText() {
   return "All saved records";
 }
 
-function selectedSummary() {
-  const selectedDays = dailyRecords.filter(recordInPeriod);
+function selectedSummary(range = getPeriodRange()) {
+  const selectedDays = dailyRecords.filter((r) => dateFromISO(r.date) >= range[0] && dateFromISO(r.date) <= range[1]);
   const summary = {
     gross: 0,
     dailyExpenses: 0,
@@ -659,7 +745,7 @@ function selectedSummary() {
   });
 
   expenses.forEach((expense) => {
-    const amount = recurringExpenseAmount(expense);
+    const amount = recurringExpenseAmount(expense, range);
     summary.fixedExpenses += amount;
     summary.expenseBreakdown[expense.category] += amount;
   });
@@ -704,13 +790,20 @@ function readAuthFields() {
 
 async function loadCloudData() {
   if (!session) return;
+  const owner = session.user.id;
   setCloudStatus("Loading cloud records...", "loading");
   const [cloudDays, cloudExpenses] = await Promise.all([
     cloudRequest("/rest/v1/daily_entries?select=*,platform_earnings(*)&order=work_date.desc"),
     cloudRequest("/rest/v1/expenses?select=*&order=expense_date.desc"),
   ]);
-  dailyRecords = consolidateDailyRecords(cloudDays.map(dailyFromCloud));
-  expenses = cloudExpenses.map(expenseFromCloud);
+  if (session?.user.id !== owner) return;
+  const overlay = (rows, kind) => {
+    const map = new Map(rows.map((r) => [r.id, r]));
+    pending.filter((p) => p.owner === owner && p.kind === kind).forEach((p) => p.deleted ? map.delete(p.record.id) : map.set(p.record.id, p.record));
+    return [...map.values()];
+  };
+  dailyRecords = overlay(cloudDays.map(dailyFromCloud), "day");
+  expenses = overlay(cloudExpenses.map(expenseFromCloud), "expense");
   saveAll();
   render();
   setCloudStatus("Cloud records loaded.", "success");
@@ -718,33 +811,17 @@ async function loadCloudData() {
 
 async function saveDailyToCloud(record) {
   if (!session) return;
-  await cloudRequest(`/rest/v1/daily_entries?id=eq.${encodeURIComponent(record.id)}`, { method: "DELETE" });
-  await cloudRequest("/rest/v1/daily_entries", {
+  await cloudRequest("/rest/v1/rpc/save_driver_day", {
     method: "POST",
-    headers: { Prefer: "return=minimal" },
-    body: JSON.stringify(dailyToCloud(record)),
+    body: JSON.stringify({ entry: dailyToCloud(record), earnings: record.platforms }),
   });
-  const platformRows = record.platforms.map((platform) => ({
-    daily_entry_id: record.id,
-    platform_name: platform.name,
-    gross_income: platform.amount,
-    trips: platform.trips,
-  }));
-  if (platformRows.length) {
-    await cloudRequest("/rest/v1/platform_earnings", {
-      method: "POST",
-      headers: { Prefer: "return=minimal" },
-      body: JSON.stringify(platformRows),
-    });
-  }
 }
 
 async function saveExpenseToCloud(expense) {
   if (!session) return;
-  await cloudRequest(`/rest/v1/expenses?id=eq.${encodeURIComponent(expense.id)}`, { method: "DELETE" });
-  await cloudRequest("/rest/v1/expenses", {
+  await cloudRequest("/rest/v1/expenses?on_conflict=id", {
     method: "POST",
-    headers: { Prefer: "return=minimal" },
+    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
     body: JSON.stringify(expenseToCloud(expense)),
   });
 }
@@ -761,15 +838,25 @@ async function deleteExpenseFromCloud(id) {
 
 async function pushLocalDataToCloud() {
   if (!session) return;
-  setCloudStatus("Syncing local records to cloud...", "loading");
-  for (const record of dailyRecords) {
-    await saveDailyToCloud(record);
-  }
-  for (const expense of expenses) {
-    await saveExpenseToCloud(expense);
+  if (saving) return;
+  saving = true;
+  document.querySelectorAll("form button, #syncButton, #clearButton").forEach((b) => b.disabled = true);
+  const owner = session.user.id;
+  try {
+  for (const item of pending.filter((p) => p.owner === owner)) {
+    if (session?.user.id !== owner) break;
+    savingIds.add(item.record.id);
+    renderTable();
+    try {
+      if (item.deleted) await (item.kind === "day" ? deleteDailyFromCloud : deleteExpenseFromCloud)(item.record.id);
+      else await (item.kind === "day" ? saveDailyToCloud : saveExpenseToCloud)(item.record);
+      pending = pending.filter((p) => p.revision !== item.revision);
+      persistPending();
+    } finally { savingIds.delete(item.record.id); }
   }
   await loadCloudData();
   setCloudStatus("Sync complete.", "success");
+  } finally { saving = false; document.querySelectorAll("form button, #syncButton, #clearButton").forEach((b) => b.disabled = false); renderTable(); }
 }
 
 async function handleAuthRedirect() {
@@ -887,13 +974,15 @@ function tableRows() {
 }
 
 function renderTable() {
+  const count = pending.filter((p) => p.owner === (session?.user.id || "guest")).length;
+  syncButton.textContent = count ? `Retry sync (${count})` : "Sync now";
   const rows = tableRows();
   emptyState.classList.toggle("hidden", rows.length > 0);
   recordsTable.innerHTML = rows
     .map(
       (record) => `
         <tr>
-          <td>${escapeHtml(record.date)}</td>
+          <td>${escapeHtml(record.date)}<small class="record-sync">${syncLabel(record)}</small></td>
           <td>${escapeHtml(record.label)}</td>
           <td>${currency(record.gross)}</td>
           <td>${record.trips || 0}</td>
@@ -919,6 +1008,7 @@ function render() {
   renderTable();
   updateDailyGrossPreview();
   saveSettings();
+  renderReportComparison();
 }
 
 function renderRangeControls() {
@@ -945,6 +1035,8 @@ function readExpenseForm() {
     category: data.category,
     amount: data.amount,
     frequency: data.frequency,
+    coverageStart: data.coverageStart,
+    coverageEnd: data.coverageEnd,
     notes: data.notes,
   });
 }
@@ -970,6 +1062,8 @@ function fillExpenseForm(expense) {
   expenseForm.elements.category.value = expense.category;
   expenseForm.elements.amount.value = expense.amount || "";
   expenseForm.elements.frequency.value = expense.frequency;
+  expenseForm.elements.coverageStart.value = expense.coverageStart || "";
+  expenseForm.elements.coverageEnd.value = expense.coverageEnd || "";
   expenseForm.elements.notes.value = expense.notes || "";
   editingExpenseId = expense.id;
   expenseFormTitle.textContent = "Edit expense";
@@ -993,10 +1087,6 @@ function resetDayForm({ keepStatus = false } = {}) {
 function restoreDayDraft() {
   const draft = loadDayDraft();
   if (!draftHasUsefulData(draft)) return false;
-  if (draft.date && draft.date !== todayISO()) {
-    clearDayDraft();
-    return false;
-  }
 
   dayForm.elements.date.value = draft.date || todayISO();
   dayForm.elements.hours.value = draft.hours || "";
@@ -1061,13 +1151,7 @@ function updateExpenseFrequencyHelp(applyDefault = false) {
     expenseForm.elements.frequency.value = selectedDefault;
   }
 
-  if (expenseForm.elements.frequency.value === "monthly") {
-    frequencyHelp.textContent = "Monthly costs are shared across each selected day, week, month, or year automatically.";
-  } else if (expenseForm.elements.frequency.value === "yearly") {
-    frequencyHelp.textContent = "Yearly costs are divided across the year automatically, so reports include the right portion.";
-  } else {
-    frequencyHelp.textContent = "One-time costs count only when the expense date is inside the selected report period.";
-  }
+  frequencyHelp.textContent = "Amount per payment. Coverage end is inclusive. Each payment is recorded separately.";
 }
 
 function exportCsv() {
@@ -1180,6 +1264,7 @@ function seedDemoData() {
 
 dayForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (saving) return;
   const record = readDayForm();
   if (!record.gross && !record.trips && !record.hours && !record.fuel) {
     daySaveStatus.textContent = "Enter income, trips, hours, or fuel before saving.";
@@ -1187,14 +1272,22 @@ dayForm.addEventListener("submit", async (event) => {
   }
   try {
     const sameDateRecord = !editingDayId ? dailyRecords.find((item) => item.date === record.date) : null;
-    const savedRecord = sameDateRecord ? mergeDailyRecord(sameDateRecord, record) : record;
+    if (sameDateRecord) {
+      fillDayForm(sameDateRecord);
+      daySaveStatus.textContent = "This date already exists. Edit the saved totals, then save.";
+      return;
+    }
+    if (editingDayId && dailyRecords.some((r) => r.id !== editingDayId && r.date === record.date)) throw new Error("Another entry already uses this date.");
+    const savedRecord = record;
     dailyRecords = editingDayId
       ? dailyRecords.map((item) => (item.id === editingDayId ? record : item))
       : sameDateRecord
         ? dailyRecords.map((item) => (item.id === sameDateRecord.id ? savedRecord : item))
         : [...dailyRecords, savedRecord];
     saveAll();
-    await saveDailyToCloud(savedRecord);
+    queueSave("day", savedRecord);
+    editingDayId = savedRecord.id;
+    await pushLocalDataToCloud();
     clearDayDraft();
     resetDayForm({ keepStatus: true });
     daySaveStatus.textContent = `${sameDateRecord ? "Updated" : "Saved to"} History: ${savedRecord.date}, ${currency(savedRecord.gross)}, ${savedRecord.trips} ${savedRecord.trips === 1 ? "trip" : "trips"}.`;
@@ -1210,13 +1303,20 @@ dayForm.addEventListener("submit", async (event) => {
 
 expenseForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (saving) return;
   const expense = readExpenseForm();
+  if (expense.coverageEnd && expense.coverageEnd < (expense.coverageStart || expense.date)) {
+    setCloudStatus("Coverage end must be on or after coverage start.", "error");
+    return;
+  }
   try {
     expenses = editingExpenseId
       ? expenses.map((item) => (item.id === editingExpenseId ? expense : item))
       : [...expenses, expense];
     saveAll();
-    await saveExpenseToCloud(expense);
+    queueSave("expense", expense);
+    editingExpenseId = expense.id;
+    await pushLocalDataToCloud();
     resetExpenseForm();
     setCloudStatus(session ? "Expense saved to cloud." : "Expense saved in this browser.", "success");
     render();
@@ -1228,6 +1328,7 @@ expenseForm.addEventListener("submit", async (event) => {
 });
 
 recordsTable.addEventListener("click", async (event) => {
+  if (saving) return;
   const editDayId = event.target.dataset.editDay;
   const editExpenseId = event.target.dataset.editExpense;
   const deleteDayId = event.target.dataset.deleteDay;
@@ -1247,7 +1348,8 @@ recordsTable.addEventListener("click", async (event) => {
     dailyRecords = dailyRecords.filter((item) => item.id !== deleteDayId);
     saveAll();
     try {
-      await deleteDailyFromCloud(deleteDayId);
+      queueSave("day", { id: deleteDayId }, true);
+      await pushLocalDataToCloud();
       setCloudStatus(session ? "Deleted from cloud." : "Deleted from this browser.", "success");
     } catch (error) {
       setCloudStatus(`Cloud delete failed. ${error.message}`, "error");
@@ -1260,7 +1362,8 @@ recordsTable.addEventListener("click", async (event) => {
     expenses = expenses.filter((item) => item.id !== deleteExpenseId);
     saveAll();
     try {
-      await deleteExpenseFromCloud(deleteExpenseId);
+      queueSave("expense", { id: deleteExpenseId }, true);
+      await pushLocalDataToCloud();
       setCloudStatus(session ? "Deleted from cloud." : "Deleted from this browser.", "success");
     } catch (error) {
       setCloudStatus(`Cloud delete failed. ${error.message}`, "error");
@@ -1324,6 +1427,8 @@ signUpButton.addEventListener("click", async () => {
 });
 
 signOutButton.addEventListener("click", () => {
+  if (saving) { setCloudStatus("Please wait until saving finishes.", "info"); return; }
+  if (pending.some((p) => p.owner === session?.user.id)) { setCloudStatus("Some changes are not synced. Retry Sync now before signing out.", "error"); return; }
   saveSession(null);
   clearLocalRecords();
   setCloudStatus("Signed out. Records hidden on this device. Sign in again to load Supabase records.", "success");
@@ -1331,6 +1436,10 @@ signOutButton.addEventListener("click", () => {
 
 syncButton.addEventListener("click", async () => {
   try {
+    if (session && pending.some((p) => p.owner === "guest") && window.confirm("Upload this browser's signed-out entries to your account?")) {
+      pending.forEach((p) => { if (p.owner === "guest") p.owner = session.user.id; });
+      persistPending();
+    }
     await pushLocalDataToCloud();
   } catch (error) {
     setCloudStatus(error.message, "error");
@@ -1366,6 +1475,8 @@ clearButton.addEventListener("click", async () => {
   }
   dailyRecords = [];
   expenses = [];
+  pending = pending.filter((p) => p.owner !== (session?.user.id || "guest"));
+  persistPending();
   saveAll();
   resetDayForm();
   resetExpenseForm();
@@ -1373,6 +1484,12 @@ clearButton.addEventListener("click", async () => {
 });
 
 const settings = loadSettings();
+document.querySelector("#reportBasis").value = settings.reportBasis || "payments";
+document.querySelector("#reportBasis").addEventListener("change", render);
+document.querySelector("#previousPeriod").addEventListener("click", () => moveReport(-1));
+document.querySelector("#nextPeriod").addEventListener("click", () => moveReport(1));
+document.querySelector("#downloadReport").addEventListener("click", downloadReport);
+window.addEventListener("online", () => pushLocalDataToCloud().catch((e) => setCloudStatus(e.message, "error")));
 periodSelect.value = settings.period || "week";
 referenceDate.value = todayISO();
 rangeStartDate.value = settings.rangeStartDate || referenceDate.value || todayISO();
