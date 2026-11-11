@@ -691,3 +691,14 @@ button:disabled { opacity: 0.55; cursor: wait; }
     min-height: 122px;
   }
 }
+/* Maintenance cards remain readable on phones without horizontal scrolling. */
+.maintenance-panel { margin-top: 24px; }
+.maintenance-panel details { margin: 18px 0; padding: 12px; border: 1px solid #cbd8e2; border-radius: 10px; }
+.maintenance-panel summary { cursor: pointer; font-weight: 600; }
+.maintenance-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 18px; }
+.maintenance-form .maintenance-help { grid-column: 1 / -1; }
+.maintenance-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 14px; }
+.maintenance-card { border: 1px solid #cbd8e2; border-radius: 10px; padding: 16px; margin: 10px 0; overflow-wrap: anywhere; }
+.maintenance-card h3 { margin: 0; }
+.maintenance-card .button { margin: 8px 4px 0 0; white-space: nowrap; }
+.maintenance-panel input, .maintenance-panel select { min-width: 0; width: 100%; }
