@@ -72,6 +72,8 @@ const categoryDefaults = {
 const storedDailyRecords = loadList(DAILY_STORAGE_KEY);
 let dailyRecords = storedDailyRecords.map(normalizeDailyRecord);
 let expenses = [...legacyExpensesFromDailyRecords(storedDailyRecords), ...loadList(EXPENSE_STORAGE_KEY).map(normalizeExpense)];
+const MAINTENANCE_KEY = "driver-ledger-maintenance-v1";
+let maintenanceItems = loadList(MAINTENANCE_KEY);
 let editingDayId = null;
 let editingExpenseId = null;
 let session = loadSession();
@@ -165,11 +167,14 @@ function loadDayDraft() {
 }
 
 function saveAll() {
+  localStorage.setItem(MAINTENANCE_KEY, JSON.stringify(maintenanceItems));
   localStorage.setItem(DAILY_STORAGE_KEY, JSON.stringify(dailyRecords));
   localStorage.setItem(EXPENSE_STORAGE_KEY, JSON.stringify(expenses));
 }
 
 function clearLocalRecords() {
+  maintenanceItems = [];
+  resetMaintenanceForms();
   dailyRecords = [];
   expenses = [];
   saveAll();
@@ -792,9 +797,10 @@ async function loadCloudData() {
   if (!session) return;
   const owner = session.user.id;
   setCloudStatus("Loading cloud records...", "loading");
-  const [cloudDays, cloudExpenses] = await Promise.all([
+  const [cloudDays, cloudExpenses, cloudMaintenance] = await Promise.all([
     cloudRequest("/rest/v1/daily_entries?select=*,platform_earnings(*)&order=work_date.desc"),
     cloudRequest("/rest/v1/expenses?select=*&order=expense_date.desc"),
+    cloudRequest("/rest/v1/maintenance_items?select=*"),
   ]);
   if (session?.user.id !== owner) return;
   const overlay = (rows, kind) => {
@@ -804,6 +810,7 @@ async function loadCloudData() {
   };
   dailyRecords = overlay(cloudDays.map(dailyFromCloud), "day");
   expenses = overlay(cloudExpenses.map(expenseFromCloud), "expense");
+  maintenanceItems = overlay(cloudMaintenance.map((r) => ({...r.payload, id:r.id})), "maintenance");
   saveAll();
   render();
   setCloudStatus("Cloud records loaded.", "success");
@@ -848,7 +855,8 @@ async function pushLocalDataToCloud() {
     savingIds.add(item.record.id);
     renderTable();
     try {
-      if (item.deleted) await (item.kind === "day" ? deleteDailyFromCloud : deleteExpenseFromCloud)(item.record.id);
+      if (item.kind === "maintenance") await saveMaintenanceToCloud(item);
+      else if (item.deleted) await (item.kind === "day" ? deleteDailyFromCloud : deleteExpenseFromCloud)(item.record.id);
       else await (item.kind === "day" ? saveDailyToCloud : saveExpenseToCloud)(item.record);
       pending = pending.filter((p) => p.revision !== item.revision);
       persistPending();
@@ -1003,6 +1011,7 @@ function renderTable() {
 }
 
 function render() {
+  renderMaintenance();
   renderRangeControls();
   renderDashboard();
   renderTable();
@@ -1262,6 +1271,158 @@ function seedDemoData() {
   render();
 }
 
+const serviceTypes = ["Engine oil", "Oil filter", "Transmission fluid", "Brake inspection", "Brake replacement", "Tire rotation", "Other service"];
+function maintenanceSummary(vehicle, type, records = maintenanceItems, today = todayISO()) {
+  const history = records.filter(r => r.kind === "service" && r.vehicleId === vehicle.id && r.service === type && r.date <= today)
+    .sort((a,b) => b.date.localeCompare(a.date) || b.odometer-a.odometer);
+  const last = history[0];
+  if (!last) return {last:null, distance:null, reminder:"Service history unknown."};
+  const distance = vehicle.odometer >= last.odometer ? vehicle.odometer-last.odometer : null;
+  const dueKm = last.intervalKm ? last.odometer + last.intervalKm : null;
+  const dueDate = last.intervalMonths ? localDateString(addMonthsClamped(dateFromISO(last.date),last.intervalMonths)) : null;
+  let reminder = "Schedule unknown. Enter the manufacturer's guidance or dashboard reminder.";
+  if (last.guidance && (dueKm !== null || dueDate)) {
+    const due = (dueKm !== null && vehicle.odometer >= dueKm) || (dueDate && today >= dueDate);
+    reminder = (due ? "Due according to entered guidance: " : "Next service: ") +
+      [dueKm !== null ? dueKm.toLocaleString()+" km" : "", dueDate || ""].filter(Boolean).join(" or ") +
+      (dueKm !== null && dueDate ? " (whichever comes first)." : ".");
+  }
+  if (last.dashboard) reminder += " Dashboard reminder: " + last.dashboard;
+  const filter = type === "Engine oil" && last.visit ? records.find(r => r.kind === "service" && r.vehicleId === vehicle.id &&
+    r.service === "Oil filter" && r.visit === last.visit && r.date === last.date && r.odometer === last.odometer) : null;
+  return {last, distance, reminder, filter};
+}
+async function saveMaintenanceToCloud(item) {
+  const path = "/rest/v1/maintenance_items";
+  if (item.deleted) return cloudRequest(path+"?id=eq."+encodeURIComponent(item.record.id), {method:"DELETE"});
+  return cloudRequest(path+"?on_conflict=id", {method:"POST",headers:{Prefer:"resolution=merge-duplicates,return=minimal"},
+    body:JSON.stringify({id:item.record.id,user_id:session.user.id,payload:item.record})});
+}
+function resetMaintenanceForms() {
+  ["vehicleForm","serviceForm"].forEach(id => { const f=document.getElementById(id); if(f){ f.reset(); delete f.dataset.editId; } });
+}
+function initMaintenance() {
+  const root = document.querySelector("#maintenanceSection");
+  root.innerHTML = `
+    <p class="eyebrow">Vehicle care</p><h2>Vehicle Maintenance</h2>
+    <p>Search your records before approving work. Reminders use the guidance you enter for your specific vehicle; no default intervals are assumed.</p>
+    <details><summary>Add or update a vehicle</summary>
+      <form id="vehicleForm" class="maintenance-form">
+        <label class="field"><span>Vehicle name, year, make and model</span><input name="name" required maxlength="120" placeholder="2022 Toyota Camry · ABC123" /></label>
+        <label class="field"><span>Current odometer (km)</span><input name="odometer" type="number" min="0" step="0.1" required /></label>
+        <label class="field"><span>Reading date</span><input name="readingDate" type="date" required /></label>
+        <button class="button" type="submit">Save vehicle</button><button class="button secondary" type="reset">Cancel edit</button>
+      </form>
+    </details>
+    <div id="maintenanceVehicles"></div>
+    <details><summary>Record a completed service</summary>
+      <form id="serviceForm" class="maintenance-form">
+        <label class="field"><span>Vehicle</span><select name="vehicleId" required></select></label>
+        <label class="field"><span>Service type</span><select name="service">${serviceTypes.map(t=>"<option>"+t+"</option>").join("")}</select></label>
+        <label class="field"><span>Completion date</span><input name="date" type="date" required /></label>
+        <label class="field"><span>Odometer at service (km)</span><input name="odometer" type="number" min="0" step="0.1" required /></label>
+        <label class="field"><span>Cost for this service</span><input name="cost" type="number" min="0" step="0.01" required /></label>
+        <label class="field"><span>Visit / invoice reference (optional)</span><input name="visit" maxlength="120" placeholder="Same reference for oil and filter" /></label>
+        <label class="field"><span>Receipt link (optional, https)</span><input name="receipt" type="url" placeholder="https://…" /></label>
+        <label class="field"><span>Note (optional)</span><textarea name="note" maxlength="2000"></textarea></label>
+        <label class="field"><span>Guidance source (manual page / manufacturer URL)</span><input name="guidance" maxlength="500" placeholder="For this vehicle and driving conditions" /></label>
+        <label class="field"><span>Service interval (km, optional)</span><input name="intervalKm" type="number" min="1" step="1" /></label>
+        <label class="field"><span>Service interval (months, optional)</span><input name="intervalMonths" type="number" min="1" max="120" step="1" /></label>
+        <label class="field"><span>Dashboard reminder (optional)</span><input name="dashboard" maxlength="300" placeholder="e.g. Oil life 15%, checked Nov 11" /></label>
+        <p class="maintenance-help">Record oil and filter separately. For a bundled bill, put the cost on one record and 0 on the other, and use the same visit reference. Costs here are a service log only: add the bill once under Other costs to include it in net income.</p>
+        <button class="button" type="submit">Save service</button><button class="button secondary" type="reset">Cancel edit</button>
+      </form>
+    </details>
+    <label class="field"><span>Search vehicle or service type</span><input id="maintenanceSearch" type="search" placeholder="Engine oil, brakes, Toyota…" /></label>
+    <p id="maintenanceStatus" role="status"></p>
+    <div id="maintenanceResults" class="maintenance-results"></div>
+    <details><summary>All service records</summary><div id="maintenanceHistory"></div></details>`;
+  const vf=document.getElementById("vehicleForm"), sf=document.getElementById("serviceForm");
+  vf.elements.readingDate.value=todayISO(); sf.elements.date.value=todayISO();
+  [vf,sf].forEach(f=>f.addEventListener("reset",()=>{delete f.dataset.editId;}));
+  document.getElementById("maintenanceSearch").addEventListener("input",renderMaintenance);
+  vf.addEventListener("submit",async e=>{
+    e.preventDefault(); if(saving)return;
+    const d=Object.fromEntries(new FormData(vf));
+    const record={...d,id:vf.dataset.editId||makeId(),kind:"vehicle",odometer:Number(d.odometer)};
+    if(d.readingDate>todayISO())return maintenanceMessage("Reading date cannot be in the future.");
+    const latest=Math.max(0,...maintenanceItems.filter(r=>r.vehicleId===record.id).map(r=>r.odometer));
+    if(record.odometer<latest)return maintenanceMessage("Current odometer cannot be below a recorded service reading.");
+    await storeMaintenance(record,vf);
+  });
+  sf.addEventListener("submit",async e=>{
+    e.preventDefault(); if(saving)return;
+    const d=Object.fromEntries(new FormData(sf));
+    const vehicle=maintenanceItems.find(v=>v.kind==="vehicle"&&v.id===d.vehicleId);
+    if(!vehicle)return maintenanceMessage("Add a vehicle first.");
+    if(d.date>todayISO())return maintenanceMessage("Only completed services can be recorded.");
+    if(d.receipt && !/^https:\/\//i.test(d.receipt))return maintenanceMessage("Use an https receipt link.");
+    if((d.intervalKm||d.intervalMonths)&&!d.guidance.trim())return maintenanceMessage("Enter the guidance source for this interval.");
+    if(Number(d.odometer)>vehicle.odometer)return maintenanceMessage("Update the vehicle's current odometer first.");
+    const record={...d,id:sf.dataset.editId||makeId(),kind:"service",odometer:Number(d.odometer),cost:Number(d.cost),
+      intervalKm:Number(d.intervalKm)||null,intervalMonths:Number(d.intervalMonths)||null};
+    await storeMaintenance(record,sf);
+  });
+  root.addEventListener("click",async e=>{
+    const edit=e.target.dataset.maintenanceEdit, del=e.target.dataset.maintenanceDelete;
+    const record=maintenanceItems.find(r=>r.id===(edit||del)); if(!record||saving)return;
+    if(edit){
+      const f=record.kind==="vehicle"?vf:sf;
+      f.reset(); f.dataset.editId=record.id;
+      Object.entries(record).forEach(([key,value])=>{if(f.elements.namedItem(key))f.elements.namedItem(key).value=value??"";});
+      f.closest("details").open=true; f.scrollIntoView({behavior:"smooth",block:"center"});
+    }
+    if(del&&window.confirm("Delete this service record? This will change its service history.")){
+      maintenanceItems=maintenanceItems.filter(r=>r.id!==del);
+      queueSave("maintenance",{id:del},true); saveAll(); renderMaintenance();
+      try{await pushLocalDataToCloud(); maintenanceMessage(session?"Deleted from cloud.":"Deleted locally.");}
+      catch(err){maintenanceMessage("Delete pending sync: "+err.message);}
+    }
+  });
+}
+function maintenanceMessage(message){document.getElementById("maintenanceStatus").textContent=message;}
+async function storeMaintenance(record,form){
+  maintenanceItems=maintenanceItems.filter(r=>r.id!==record.id).concat(record);
+  queueSave("maintenance",record); saveAll(); form.dataset.editId=record.id; renderMaintenance();
+  try{
+    await pushLocalDataToCloud(); form.reset();
+    if(form.elements.date)form.elements.date.value=todayISO();
+    if(form.elements.readingDate)form.elements.readingDate.value=todayISO();
+    maintenanceMessage(session?"Saved to cloud.":"Saved in this browser. Sign in and Sync now to upload.");
+  }catch(err){maintenanceMessage("Saved locally; cloud sync pending. "+err.message);}
+  renderMaintenance();
+}
+function renderMaintenance(){
+  const root=document.querySelector("#maintenanceResults"); if(!root)return;
+  const vehicles=maintenanceItems.filter(r=>r.kind==="vehicle");
+  const select=document.getElementById("serviceForm").elements.vehicleId, selected=select.value;
+  select.innerHTML='<option value="">Select vehicle</option>'+vehicles.map(v=>`<option value="${escapeHtml(v.id)}">${escapeHtml(v.name)}</option>`).join("");
+  select.value=selected;
+  const query=document.getElementById("maintenanceSearch").value.trim().toLowerCase();
+  const actions=r=>`<button type="button" class="button secondary" data-maintenance-edit="${escapeHtml(r.id)}">Edit</button>`+
+    (r.kind==="service"?` <button type="button" class="button danger" data-maintenance-delete="${escapeHtml(r.id)}">Delete</button>`:"");
+  document.getElementById("maintenanceVehicles").innerHTML=vehicles.map(v=>`<p><strong>${escapeHtml(v.name)}</strong> · Current odometer: ${v.odometer.toLocaleString()} km (as of ${escapeHtml(v.readingDate)}) · ${syncLabel(v)} ${actions(v)}</p>`).join("");
+  const cards=[];
+  for(const v of vehicles)for(const type of serviceTypes){
+    if(! (v.name+" "+type).toLowerCase().includes(query))continue;
+    const s=maintenanceSummary(v,type);
+    cards.push(`<article class="maintenance-card"><h3>${escapeHtml(type)}</h3><p>${escapeHtml(v.name)}</p>
+      ${s.last?`<p><strong>Last completed ${escapeHtml(s.last.date)} at ${s.last.odometer.toLocaleString()} km.</strong></p>
+      <p>Current odometer: ${v.odometer.toLocaleString()} km (as of ${escapeHtml(v.readingDate)}). Distance since service: ${s.distance===null?"Unknown — check odometer":s.distance.toLocaleString()+" km"}.</p>
+      ${type==="Engine oil"?"<p>"+(s.filter?"Oil filter replaced at the same visit.":"Oil filter replacement at this visit is not confirmed.")+"</p>":""}`:"<p><strong>Service history unknown.</strong></p>"}
+      <p>${escapeHtml(s.reminder)}</p>${s.last?.guidance?"<small>Source: "+escapeHtml(s.last.guidance)+"</small>":""}</article>`);
+  }
+  root.innerHTML=cards.join("")||"<p>"+(vehicles.length?"No matching vehicle or service.":"Add a vehicle to track its service history.")+"</p>";
+  document.getElementById("maintenanceHistory").innerHTML=maintenanceItems.filter(r=>r.kind==="service")
+    .filter(r=>((vehicles.find(v=>v.id===r.vehicleId)?.name||"")+" "+r.service).toLowerCase().includes(query))
+    .sort((a,b)=>b.date.localeCompare(a.date)).map(r=>`<article class="maintenance-card">
+      <strong>${escapeHtml(vehicles.find(v=>v.id===r.vehicleId)?.name||"Unknown vehicle")} · ${escapeHtml(r.service)}</strong>
+      <p>${escapeHtml(r.date)} · ${r.odometer.toLocaleString()} km · ${currency(r.cost)} · ${syncLabel(r)}</p>
+      <p>${escapeHtml(r.note||"")}</p><p>Visit: ${escapeHtml(r.visit||"Not specified")}</p>
+      ${/^https:\/\//i.test(r.receipt||"")?`<a href="${escapeHtml(r.receipt)}" target="_blank" rel="noopener noreferrer">View receipt</a>`:""}
+      ${actions(r)}</article>`).join("")||"<p>No recorded services.</p>";
+}
+
 dayForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (saving) return;
@@ -1475,7 +1636,7 @@ clearButton.addEventListener("click", async () => {
   }
   dailyRecords = [];
   expenses = [];
-  pending = pending.filter((p) => p.owner !== (session?.user.id || "guest"));
+  pending = pending.filter((p) => p.kind === "maintenance" || p.owner !== (session?.user.id || "guest"));
   persistPending();
   saveAll();
   resetDayForm();
@@ -1484,6 +1645,7 @@ clearButton.addEventListener("click", async () => {
 });
 
 const settings = loadSettings();
+initMaintenance();
 document.querySelector("#reportBasis").value = settings.reportBasis || "payments";
 document.querySelector("#reportBasis").addEventListener("change", render);
 document.querySelector("#previousPeriod").addEventListener("click", () => moveReport(-1));
