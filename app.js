@@ -1271,7 +1271,7 @@ function seedDemoData() {
   render();
 }
 
-const serviceTypes = ["Engine oil", "Oil filter", "Transmission fluid", "Brake inspection", "Brake replacement", "Tire rotation", "Other service"];
+const serviceTypes = ["Engine oil", "Transmission fluid", "Differential fluid", "Brake inspection", "Brake replacement", "Tire rotation", "Other service"];
 function maintenanceSummary(vehicle, type, records = maintenanceItems, today = todayISO()) {
   const history = records.filter(r => r.kind === "service" && r.vehicleId === vehicle.id && r.service === type && r.date <= today)
     .sort((a,b) => b.date.localeCompare(a.date) || b.odometer-a.odometer);
@@ -1322,14 +1322,14 @@ function initMaintenance() {
         <label class="field"><span>Completion date</span><input name="date" type="date" required /></label>
         <label class="field"><span>Odometer at service (km)</span><input name="odometer" type="number" min="0" step="0.1" required /></label>
         <label class="field"><span>Cost for this service</span><input name="cost" type="number" min="0" step="0.01" required /></label>
-        <label class="field"><span>Visit / invoice reference (optional)</span><input name="visit" maxlength="120" placeholder="Same reference for oil and filter" /></label>
+        <label class="field"><span>Visit / invoice reference (optional)</span><input name="visit" maxlength="120" placeholder="Receipt or invoice number" /></label>
         <label class="field"><span>Receipt link (optional, https)</span><input name="receipt" type="url" placeholder="https://…" /></label>
         <label class="field"><span>Note (optional)</span><textarea name="note" maxlength="2000"></textarea></label>
         <label class="field"><span>Guidance source (manual page / manufacturer URL)</span><input name="guidance" maxlength="500" placeholder="For this vehicle and driving conditions" /></label>
         <label class="field"><span>Service interval (km, optional)</span><input name="intervalKm" type="number" min="1" step="1" /></label>
         <label class="field"><span>Service interval (months, optional)</span><input name="intervalMonths" type="number" min="1" max="120" step="1" /></label>
         <label class="field"><span>Dashboard reminder (optional)</span><input name="dashboard" maxlength="300" placeholder="e.g. Oil life 15%, checked Nov 11" /></label>
-        <p class="maintenance-help">Record oil and filter separately. For a bundled bill, put the cost on one record and 0 on the other, and use the same visit reference. Costs here are a service log only: add the bill once under Other costs to include it in net income.</p>
+        <p class="maintenance-help">For differential fluid, note whether the front or rear differential was serviced. Record any oil filter replacement in the engine oil notes. Costs here are a service log only: add the bill once under Other costs to include it in net income.</p>
         <button class="button" type="submit">Save service</button><button class="button secondary" type="reset">Cancel edit</button>
       </form>
     </details>
@@ -1339,7 +1339,7 @@ function initMaintenance() {
     <details><summary>All service records</summary><div id="maintenanceHistory"></div></details>`;
   const vf=document.getElementById("vehicleForm"), sf=document.getElementById("serviceForm");
   vf.elements.readingDate.value=todayISO(); sf.elements.date.value=todayISO();
-  [vf,sf].forEach(f=>f.addEventListener("reset",()=>{delete f.dataset.editId;}));
+  [vf,sf].forEach(f=>f.addEventListener("reset",()=>{delete f.dataset.editId; if(f===sf) sf.elements.service.querySelectorAll("[data-legacy]").forEach(option=>option.remove());}));
   document.getElementById("maintenanceSearch").addEventListener("input",renderMaintenance);
   vf.addEventListener("submit",async e=>{
     e.preventDefault(); if(saving)return;
@@ -1369,6 +1369,9 @@ function initMaintenance() {
     if(edit){
       const f=record.kind==="vehicle"?vf:sf;
       f.reset(); f.dataset.editId=record.id;
+      if(record.kind==="service" && !serviceTypes.includes(record.service)){
+        const option=document.createElement("option"); option.value=record.service; option.textContent=record.service+" (existing record)"; option.dataset.legacy="true"; sf.elements.service.append(option);
+      }
       Object.entries(record).forEach(([key,value])=>{if(f.elements.namedItem(key))f.elements.namedItem(key).value=value??"";});
       f.closest("details").open=true; f.scrollIntoView({behavior:"smooth",block:"center"});
     }
@@ -1409,7 +1412,7 @@ function renderMaintenance(){
     cards.push(`<article class="maintenance-card"><h3>${escapeHtml(type)}</h3><p>${escapeHtml(v.name)}</p>
       ${s.last?`<p><strong>Last completed ${escapeHtml(s.last.date)} at ${s.last.odometer.toLocaleString()} km.</strong></p>
       <p>Current odometer: ${v.odometer.toLocaleString()} km (as of ${escapeHtml(v.readingDate)}). Distance since service: ${s.distance===null?"Unknown — check odometer":s.distance.toLocaleString()+" km"}.</p>
-      ${type==="Engine oil"?"<p>"+(s.filter?"Oil filter replaced at the same visit.":"Oil filter replacement at this visit is not confirmed.")+"</p>":""}`:"<p><strong>Service history unknown.</strong></p>"}
+      ${type==="Engine oil" && s.filter?"<p>Oil filter replaced at the same visit (existing record).</p>":""}`:"<p><strong>Service history unknown.</strong></p>"}
       <p>${escapeHtml(s.reminder)}</p>${s.last?.guidance?"<small>Source: "+escapeHtml(s.last.guidance)+"</small>":""}</article>`);
   }
   root.innerHTML=cards.join("")||"<p>"+(vehicles.length?"No matching vehicle or service.":"Add a vehicle to track its service history.")+"</p>";
