@@ -8,7 +8,7 @@
       name="description"
       content="A simple local rideshare income and expense tracker for self-employed drivers."
     />
-    <link rel="stylesheet" href="./styles.css?v=20261111" />
+    <link rel="stylesheet" href="./styles.css?v=20261113" />
   </head>
   <body>
     <main class="app-shell">
@@ -296,10 +296,15 @@
             </table>
             <p class="empty-state hidden" id="emptyState">No records yet. Add a day or load the sample data.</p>
           </div>
+          <div class="history-pagination" aria-label="History display controls">
+            <p id="historyCount" role="status" aria-live="polite"></p>
+            <button class="button secondary" id="historyLess" type="button" aria-controls="recordsTable">Show 20 fewer</button>
+            <button class="button secondary" id="historyMore" type="button" aria-controls="recordsTable">Show 20 more</button>
+          </div>
         </section>
       </section>
       <section class="entry-panel maintenance-panel" id="maintenanceSection" aria-label="Vehicle maintenance"></section>
     </main>
-    <script src="./app.js?v=20261111-maintenance"></script>
+    <script src="./app.js?v=20261113-history"></script>
   </body>
 </html>

@@ -702,3 +702,6 @@ button:disabled { opacity: 0.55; cursor: wait; }
 .maintenance-card h3 { margin: 0; }
 .maintenance-card .button { margin: 8px 4px 0 0; white-space: nowrap; }
 .maintenance-panel input, .maintenance-panel select { min-width: 0; width: 100%; }
+.history-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.history-pagination p { margin: 0; margin-right: auto; }
+.history-pagination button:disabled { opacity: .5; cursor: default; }

@@ -32,6 +32,9 @@ const rangeEndDate = document.querySelector("#rangeEndDate");
 const customRangeFields = document.querySelectorAll(".custom-range-field");
 const currencyInput = document.querySelector("#currencyInput");
 const searchInput = document.querySelector("#searchInput");
+const HISTORY_PAGE_SIZE = 20;
+let historyLimit = HISTORY_PAGE_SIZE;
+let historyQuery = "";
 const exportButton = document.querySelector("#exportButton");
 const clearButton = document.querySelector("#clearButton");
 const seedDemoButton = document.querySelector("#seedDemoButton");
@@ -173,6 +176,7 @@ function saveAll() {
 }
 
 function clearLocalRecords() {
+  historyLimit = HISTORY_PAGE_SIZE;
   maintenanceItems = [];
   resetMaintenanceForms();
   dailyRecords = [];
@@ -985,8 +989,16 @@ function renderTable() {
   const count = pending.filter((p) => p.owner === (session?.user.id || "guest")).length;
   syncButton.textContent = count ? `Retry sync (${count})` : "Sync now";
   const rows = tableRows();
+  const query = searchInput.value.trim().toLowerCase();
+  if (query !== historyQuery) { historyLimit = HISTORY_PAGE_SIZE; historyQuery = query; }
+  historyLimit = Math.min(historyLimit, Math.max(HISTORY_PAGE_SIZE, Math.ceil(rows.length / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE));
+  const visibleRows = rows.slice(0, historyLimit);
+  document.querySelector("#historyCount").textContent = `Showing ${visibleRows.length} of ${rows.length} ${query ? "matching records" : "records"}`;
+  document.querySelector("#historyMore").disabled = historyLimit >= rows.length;
+  document.querySelector("#historyLess").disabled = historyLimit <= HISTORY_PAGE_SIZE;
+  emptyState.textContent = query ? "No records match your search." : "No records yet. Add a day or load the sample data.";
   emptyState.classList.toggle("hidden", rows.length > 0);
-  recordsTable.innerHTML = rows
+  recordsTable.innerHTML = visibleRows
     .map(
       (record) => `
         <tr>
@@ -1648,6 +1660,8 @@ clearButton.addEventListener("click", async () => {
 });
 
 const settings = loadSettings();
+document.querySelector("#historyMore").addEventListener("click", () => { historyLimit += HISTORY_PAGE_SIZE; renderTable(); });
+document.querySelector("#historyLess").addEventListener("click", () => { historyLimit = Math.max(HISTORY_PAGE_SIZE, historyLimit - HISTORY_PAGE_SIZE); renderTable(); });
 initMaintenance();
 document.querySelector("#reportBasis").value = settings.reportBasis || "payments";
 document.querySelector("#reportBasis").addEventListener("change", render);
