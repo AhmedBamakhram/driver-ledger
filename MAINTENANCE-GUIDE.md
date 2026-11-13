@@ -11,8 +11,8 @@
 ## Use
 
 - Enter a distinct vehicle name including year, make/model and plate or nickname. Use Edit next to the vehicle to update its current odometer and reading date. Daily driving entries are not associated with a vehicle, so they do not silently update this reading.
-- Record each completed service separately, including engine oil and oil filter. Use the same visit reference, date and odometer to identify the same visit.
-- For a bundled invoice, allocate its total once across the service records (for example oil $90 and filter $0). Add a receipt HTTPS link or a note. File uploads are not included.
+- Record each completed service separately. Differential fluid is available; specify front or rear in the notes. Oil filter is no longer a new-service option: include filter work in the engine oil notes. Existing oil-filter records remain available in service history.
+- For a bundled invoice, allocate its total once across the service records. Add a receipt HTTPS link or a note. File uploads are not included.
 - Search a vehicle or service type to see its latest recorded service, distance since, and entered reminder. No record means **Service history unknown**.
 - Enter intervals only from guidance for the particular vehicle and driving conditions, with a manual page/source. Both kilometre and month intervals use whichever comes first. A dashboard reminder is displayed as entered; update it after checking the vehicle. There is no manufacturer lookup or automatic dashboard connection.
 - Reminders apply to the latest completed service record. Edit that record to correct its guidance. Records represent the driver's confirmation of completed work, not independent verification.

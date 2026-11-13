@@ -1,8 +1,81 @@
 # Driver Ledger MVP
 
+Last updated: November 13, 2026.
+
+See [UPDATE-GUIDE.md](UPDATE-GUIDE.md) for the October report and sync update, and [MAINTENANCE-GUIDE.md](MAINTENANCE-GUIDE.md) for the maintenance database setup. The November 13 History update needs only the three website files; no new SQL is required.
+
 Driver Ledger is a simple web app for self-employed rideshare drivers who use their own car. It tracks daily income, trips, hours, kilometres, fuel, and other business expenses so the driver can see gross income, expenses, and net profit.
 
 This document records what was built, what problems were found, and how the current GitHub + Vercel + Supabase setup works.
+
+## Recent Updates
+
+### Vehicle Maintenance — November 11, 2026
+
+- Added vehicles with a current odometer reading and reading date.
+- Added completed service records with vehicle, service type, date, odometer, cost, optional note and HTTPS receipt link.
+- Search by vehicle or service type to see the last recorded service and kilometres driven since.
+- Display **Service history unknown** when there is no completed service record.
+- Display reminders using the manufacturer guidance entered by the driver, or the dashboard reminder entered in the form. The app does not automatically look up manufacturer schedules or connect to the vehicle.
+- Store vehicle and service records in Supabase's `maintenance_items` table, protected by an account-owner Row Level Security policy. Local changes use the existing sync retry queue.
+
+Current service options: Engine oil, Transmission fluid, Differential fluid, Brake inspection, Brake replacement, Tire rotation, and Other service.
+
+Differential fluid was added after the initial maintenance release. Oil filter was removed from new service options; existing oil-filter records are preserved and can still be edited. Record new oil-filter work in the engine oil notes, and identify front/rear differential work in the notes.
+
+**Current limits:** Update each vehicle's odometer manually; daily driving entries are not assigned to vehicles. Receipt attachments are links, not file uploads. Maintenance costs are a separate service log: add the payment once under Other costs to include it in net income. Existing financial expenses are not automatically treated as confirmed service history.
+
+### Shorter History — November 13, 2026
+
+- Show the newest 20 financial history records initially.
+- **Show 20 more** reveals the next 20.
+- **Show 20 fewer** reduces the visible list by 20, with a minimum of 20 where available.
+- Show a count such as **Showing 20 of 145 records**.
+- Search checks all history records, including hidden rows, and starts with the first 20 matches.
+- Hiding rows does not delete data or change dashboard calculations.
+- CSV exports keep their existing behaviour; they are not limited to the visible 20 rows.
+
+These controls apply to Saved records → History, not the separate maintenance history.
+
+## Publishing These Updates
+
+| Update | Supabase action | GitHub files |
+| --- | --- | --- |
+| Initial maintenance section | Run `upgrade-20261111-maintenance.sql` once in the existing project's SQL Editor | `app.js`, `index.html`, `styles.css` |
+| Differential fluid / service-option change | None | `app.js` |
+| History: 20 records at a time | None | `app.js`, `index.html`, `styles.css` |
+| Documentation only | None | `README.md` |
+
+1. For the initial maintenance setup, run the SQL and check for **Success. No rows returned**. This applies the database changes immediately; saving the query only keeps the SQL text for reference. The user reported this step completed.
+2. Upload the updated website files together to the existing GitHub repository, replacing the files with the same names.
+3. Click **Commit changes**. Uploading without committing does not publish the changes.
+4. Vercel automatically deploys the committed code. Wait for the newest deployment to show **Ready**.
+5. Refresh the live website. If necessary, use **Ctrl + Shift + R**.
+6. Check History controls and Vehicle Maintenance. After saving a record, check its cloud status and refresh to confirm it remains.
+
+Uploading a SQL file to GitHub does not execute it in Supabase. The History update does not require rerunning the maintenance SQL. Documentation changes do not alter saved records.
+
+The maintenance section was verified on the live website during setup. The latest History changes were checked locally; verify the live deployment after uploading.
+
+## Recent Setup Problems and Solutions
+
+### Maintenance table missing
+
+The app reported `PGRST205`: it could not find `public.maintenance_items`. Run the maintenance SQL in the same Supabase project used by the app, then refresh and retry sync.
+
+### SQL syntax error on the first line
+
+The pasted introductory comment started with one dash. SQL comments need two dashes (`--`). Remove the introductory comment or correct it, keep the SQL beginning with `begin;`, and run the full script.
+
+### Maintenance section not visible
+
+GitHub had the new JavaScript but an old `index.html`, which did not contain the maintenance section. Uploading the matching HTML fixed the missing section. Keep the three website files together for updates that change structure, behaviour and styling.
+
+The section is at the bottom of the same website. [Open Vehicle Maintenance](https://driver-ledger-ruby.vercel.app/#maintenanceSection).
+
+### History became too long
+
+Added progressive display in groups of 20. Searching still checks all records, and report calculations remain independent of how many rows are displayed.
 
 ## Current Status
 
@@ -27,7 +100,7 @@ GitHub -> Vercel website -> Supabase database/auth
 
 - GitHub stores the app code.
 - Vercel hosts the live website.
-- Supabase stores users, daily entries, platform earnings, and expenses.
+- Supabase stores users, daily entries, platform earnings, expenses, and vehicle maintenance records.
 - The laptop local server is only for local testing.
 
 ## Files
@@ -39,6 +112,10 @@ GitHub -> Vercel website -> Supabase database/auth
 - `vercel.json` - Vercel hosting config for the static website
 - `.vercelignore` - tells Vercel not to deploy the local-only server file
 - `README.md` - this setup/reference document
+- `upgrade-20261029.sql` - expense coverage fields and atomic daily-save function
+- `upgrade-20261111-maintenance.sql` - account-scoped vehicle and service storage
+- `UPDATE-GUIDE.md` - report and cloud-sync update instructions
+- `MAINTENANCE-GUIDE.md` - maintenance setup instructions
 
 ## How To Run Locally
 
@@ -89,7 +166,10 @@ Expense frequency:
 
 - One time
 - Monthly
+- Every 4 months
 - Yearly
+
+**Actual payments** counts the full payment when its date is inside the report period. **Spread over coverage** allocates the payment by overlapping calendar days in its coverage period. Each payment is recorded separately; future payments are not generated automatically.
 
 ## Dashboard Reports
 
@@ -132,6 +212,8 @@ Current local storage keys:
 - `driver-ledger-settings-v1`
 - `driver-ledger-day-draft-v1`
 - `driver-ledger-supabase-session-v1`
+- `driver-ledger-pending-v2`
+- `driver-ledger-maintenance-v1`
 
 Risk: if browser data is cleared, local-only records can be deleted.
 
@@ -145,6 +227,7 @@ Supabase stores:
 - Platform earnings
 - Expenses
 - User authentication
+- Vehicles and completed maintenance services
 
 This is the important long-term storage.
 
@@ -168,7 +251,7 @@ Only the publishable browser key should be used in `app.js`. Do not put secret k
 
 ## Supabase Database SQL
 
-The following tables were created in Supabase SQL Editor.
+The following is the original table structure for reference, not a complete fresh-install script. The later SQL update files add expense coverage fields, the daily-save function, and maintenance storage. Existing financial-table RLS policies are also required.
 
 ```sql
 create table if not exists public.daily_entries (
@@ -317,7 +400,7 @@ The daily entry form showed an old date because an unsaved draft restored an old
 
 Solution:
 
-The app now clears old drafts when the draft date is not today's date, so the daily entry starts on the current date.
+New daily entries default to today's date. An unsaved draft may restore an older date to preserve the driver's work; check the date before saving.
 
 ### 8. Same-day records split into two rows
 
@@ -327,7 +410,7 @@ Saving income and fuel separately for the same day created two history rows.
 
 Solution:
 
-The app now merges same-date daily entries so income, fuel, hours, trips, and kilometres stay in one daily row.
+The current app opens an existing daily entry when a new entry uses the same date, so the driver can edit its totals. It does not automatically merge or delete historical duplicate rows.
 
 ## Auth Troubleshooting
 
@@ -383,8 +466,9 @@ Common reasons it stops:
 - Keep app simple and driver-friendly.
 - Only Uber and Lyft are shown in daily income for now.
 - Insurance and other non-daily costs are entered in the expense form, not daily entry.
-- Monthly/yearly expenses are automatically shared across reports.
-- One-time expenses count only when their date is inside the selected report period.
+- Actual payments and Spread over coverage provide separate ways to report expenses.
+- Every payment is recorded separately; future recurring payments are not created automatically.
+- In Actual payments mode, an expense counts when its payment date is inside the selected report period.
 - Clear data requires typing `DELETE` to avoid accidental deletion.
 - CSV export is available for backup and tax review.
 
